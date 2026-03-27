@@ -1,5 +1,5 @@
 from pydantic import BaseModel, Field
-from typing import Literal, List
+from typing import Literal, List, Optional
 
 
 class ConstitutionalViolation(BaseModel):
@@ -8,7 +8,7 @@ class ConstitutionalViolation(BaseModel):
 
 
 class Verdict(BaseModel):
-    ruling: Literal["UPHOLD", "STRIKE_DOWN"] = Field(..., description="The final binary judgment.")
+    ruling: Literal["UPHOLD", "STRIKE_DOWN", "INVALID"] = Field(..., description="The final binary judgment, or INVALID if generation failed.")
     violations: List[ConstitutionalViolation] = Field(default_factory=list, description="List of violations. Must be empty if UPHOLD.")
-    # Renamed to clarify this is the model's self-reported claim
-    elicited_confidence: float = Field(..., description="Self-reported confidence score from 0.0 to 1.0.")
+    # This is the model's self-reported claim
+    elicited_confidence: Optional[float] = Field(..., description="Self-reported confidence score from 0.0 to 1.0.")

@@ -1,7 +1,41 @@
 import dspy
 import re
 import json
+from src.config import get_lite_llm_name
 from src.schema import Verdict
+
+
+def _as_dict(value):
+    if hasattr(value, 'model_dump'):
+        return value.model_dump()
+    if isinstance(value, dict):
+        return value
+    return {}
+
+
+def _extract_message_payload(response_payload):
+    response_payload = _as_dict(response_payload)
+    direct_message = _as_dict(response_payload.get('message', {}))
+    if direct_message:
+        return direct_message
+
+    choices = response_payload.get('choices', []) if isinstance(response_payload, dict) else []
+    if choices:
+        first_choice = _as_dict(choices[0])
+        if first_choice:
+            return _as_dict(first_choice.get('message', {}))
+
+    return {}
+
+
+def _extract_reasoning_content(message_payload):
+    message_payload = _as_dict(message_payload)
+    return (
+        message_payload.get('reasoning_content')
+        or message_payload.get('reasoning')
+        or message_payload.get('thinking')
+        or ''
+    )
 
 
 class ConstitutionalReview(dspy.Signature):
@@ -21,7 +55,7 @@ class ConstitutionalReview(dspy.Signature):
         "ruling": "UPHOLD" or "STRIKE_DOWN",
         "summary": "Brief explanation of the verdict",
         "violations":[{"section": "Section Name", "reasoning": "Why it violates"}],
-        "elicited_confidence": <float between 0.0 and 1.0>
+        "confidence": <float between 0.0 and 1.0>
     }
     """
     context: str = dspy.InputField(desc="The full Working Constitution of the Optimism Collective.")
@@ -30,33 +64,39 @@ class ConstitutionalReview(dspy.Signature):
 
 
 class Judiciary:
-    def __init__(self, model_name):
-        # Format the model name for LiteLLM's OpenAI routing
-        lite_llm_name = f"openai/{model_name.split('/')[-1]}" if "ollama" in model_name else model_name
+    def __init__(self, model_name, think: bool | None = None):
+        self.think = think
+        lite_llm_name = get_lite_llm_name(model_name)
 
-        self.lm = dspy.LM(
-            lite_llm_name,
-            api_base='http://localhost:11434/v1',  # Route to Ollama's OpenAI-compat endpoint
-            api_key='ollama',  # Dummy key required for LiteLLM OpenAI format
-            num_ctx=16384,
-            max_tokens=8000,
-            timeout_s=600,
-            temperature=0.6,
-            cache=False,
-            logprobs=False
-        )
-        dspy.configure(lm=self.lm)
+        lm_kwargs = {
+            # For `ollama_chat/*`, LiteLLM calls Ollama's native /api/chat route.
+            'api_base': 'http://localhost:11434',
+            'api_key': 'ollama',  # Dummy key required for LiteLLM OpenAI format
+            'num_ctx': 16384,
+            'max_tokens': 8000,
+            'timeout_s': 600,
+            'temperature': 0.6,
+            'cache': False,
+        }
+        if think is not None:
+            # Ollama supports `think` on thinking-capable models (e.g., Qwen 3.x).
+            lm_kwargs['think'] = think
+
+        self.lm = dspy.LM(lite_llm_name, **lm_kwargs)
         self.predictor = dspy.Predict(ConstitutionalReview)
 
     def adjudicate(self, context, proposal_body, trial_id: int):
         # Pass the trial_id as the RNG Seed.
         # This keeps the prompt text 100% identical across all 50 trials,
         # whilst busting DSPy's kwargs cache and forcing true independent sampling.
-        result = self.predictor(
-            context=context,
-            proposal_body=proposal_body,
-            config={"seed": trial_id}
-        )
+        # Bind the predictor call to this instance's LM so multiple Judiciary
+        # objects do not accidentally share whichever LM was configured last.
+        with dspy.context(lm=self.lm):
+            result = self.predictor(
+                context=context,
+                proposal_body=proposal_body,
+                config={"seed": trial_id}
+            )
         raw = result.raw_response
 
         # --- Extract Reasoning Trace ---
@@ -65,28 +105,16 @@ class Judiciary:
         if len(self.lm.history) > 0:
             last_call = self.lm.history[-1]
             response_payload = last_call.get('response', {})
-            if hasattr(response_payload, 'model_dump'):
-                response_payload = response_payload.model_dump()
+            message_payload = _extract_message_payload(response_payload)
+            reasoning_content = _extract_reasoning_content(message_payload)
 
-            choices = response_payload.get('choices', []) if isinstance(response_payload, dict) else []
-            if choices:
-                choice_0 = choices[0]
-                if hasattr(choice_0, 'model_dump'):
-                    choice_0 = choice_0.model_dump()
-
-                # 1. Extract Reasoning across provider field variants
-                message = choice_0.get('message', {}) if isinstance(choice_0, dict) else {}
-                if hasattr(message, 'model_dump'):
-                    message = message.model_dump()
-                if isinstance(message, dict):
-                    reasoning_content = (
-                        message.get('reasoning_content')
-                        or message.get('reasoning')
-                        or message.get('thinking')
-                        or ""
-                    )
-                else:
-                    reasoning_content = ""
+        # If reasoning isn't in the dedicated API field, extract it from the raw text.
+        if not reasoning_content:
+            think_match = re.search(r'<think>(.*?)</think>', raw, re.DOTALL | re.IGNORECASE)
+            if think_match:
+                reasoning_content = think_match.group(1)
+            elif "<think>" in raw: # Handle truncation where </think> is missing
+                reasoning_content = raw.split("<think>")[-1]
 
         # --- JSON Extraction ---
         verdict_dict = None
@@ -103,18 +131,21 @@ class Judiciary:
             except json.JSONDecodeError:
                 pass
 
-        # Normalize legacy key names that may still appear in model JSON.
-        if verdict_dict and 'elicited_confidence' not in verdict_dict and 'confidence' in verdict_dict:
+        # Support both ('confidence') and ('elicited_confidence') key names, in case a model mistakenly uses the former.
+        if verdict_dict and 'confidence' in verdict_dict:
             verdict_dict['elicited_confidence'] = verdict_dict.pop('confidence')
 
-        # Robust Fallback
-        if not verdict_dict or 'ruling' not in verdict_dict:
-            fallback_ruling = "STRIKE_DOWN" if "STRIKE_DOWN" in raw else "UPHOLD"
+        # --- RIGOROUS FALLBACK ---
+        # If the model truncated or failed to output parsable JSON, we DO NOT guess.
+        # We classify it as an INVALID non-convergence.
+        is_non_convergent = False
+        if not verdict_dict or 'ruling' not in verdict_dict or verdict_dict['ruling'] not in ["UPHOLD", "STRIKE_DOWN"]:
+            is_non_convergent = True
             verdict_dict = {
-                "ruling": fallback_ruling,
-                "summary": "JSON Parsing Failed.",
-                "violations": [],
-                "elicited_confidence": 0.5
+                "ruling": "INVALID",
+                "summary": "Non-Convergence: Model exhausted max_tokens or failed to output schema.",
+                "violations":[],
+                "elicited_confidence": None  # Prevents 0.5 from skewing mean() calculations
             }
 
         verdict = Verdict(**verdict_dict)
@@ -123,5 +154,6 @@ class Judiciary:
         verdict.__dict__['reasoning_trace'] = reasoning_content
         verdict.__dict__['reasoning_length'] = len(reasoning_content)
         verdict.__dict__['raw_text'] = raw
+        verdict.__dict__['non_convergent'] = is_non_convergent
 
         return verdict

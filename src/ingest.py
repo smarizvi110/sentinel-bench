@@ -14,11 +14,12 @@ from src.config import (
     AGORA_API_KEY,
     AGORA_PAGE_SIZE,
     AGORA_API_URL,
+    RAW_DATA_DIR,
     TARGET_BASELINE_SIZE,
     WORKING_CONSTITUTION_URL,
 )
 
-RAW_DIR = Path(__file__).resolve().parents[1] / "data" / "raw"
+RAW_DIR = RAW_DATA_DIR
 SNAPSHOT_ROOT = RAW_DIR / "snapshots"
 CONTEXT_CACHE_PATH = RAW_DIR / "context.txt"
 DATASET_PATH = RAW_DIR / "benchmark_dataset.json"
@@ -75,6 +76,22 @@ def _extract_body(proposal: Dict[str, Any]) -> str:
     return ""
 
 
+def _clean_discourse_cooked_html(cooked_html: str) -> str:
+    """Normalize Discourse cooked HTML into stable plain text."""
+    if not isinstance(cooked_html, str) or not cooked_html.strip():
+        return ""
+
+    soup = BeautifulSoup(cooked_html, "html.parser")
+    for tag in soup(["script", "style", "noscript"]):
+        tag.decompose()
+
+    # Normalize spacing per line so both constitution and proposal deep fetches
+    # produce comparable text formatting.
+    raw_text = soup.get_text(separator="\n")
+    lines = [re.sub(r"\s+", " ", line).strip() for line in raw_text.splitlines()]
+    return "\n".join(line for line in lines if line)
+
+
 def expand_proposal_body(original_body: str, title: str) -> str:
     """
     Scans the original body for an Optimism forum link.
@@ -84,12 +101,9 @@ def expand_proposal_body(original_body: str, title: str) -> str:
     """
     safe_body = original_body or ""
 
-    # Regex to find links like: https://gov.optimism.io/t/some-slug-here/10527
-    match = re.search(r"https://gov\.optimism\.io/t/[a-zA-Z0-9_-]+/(\d+)", safe_body)
-
-    if not match:
-        # Sometimes the slug is missing: https://gov.optimism.io/t/10527
-        match = re.search(r"https://gov\.optimism\.io/t/(\d+)", safe_body)
+    # Match links with or without a slug, such as:
+    # https://gov.optimism.io/t/some-slug-here/10527 or https://gov.optimism.io/t/10527
+    match = re.search(r"https://gov\.optimism\.io/t/(?:[a-zA-Z0-9_-]+/)?(\d+)", safe_body)
 
     if match:
         topic_id = match.group(1)
@@ -106,11 +120,12 @@ def expand_proposal_body(original_body: str, title: str) -> str:
             data = resp.json()
 
             body_html = data["post_stream"]["posts"][0]["cooked"]
-            rich_text = BeautifulSoup(body_html, "html.parser").get_text(separator="\n").strip()
+            rich_text = _clean_discourse_cooked_html(body_html)
 
-            # Truncate to 8000 chars to protect the 16k context window
-            if len(rich_text) > 8000:
-                rich_text = rich_text[:8000] + "\n\n[TEXT TRUNCATED FOR CONTEXT LIMITS]"
+            # Truncate to 16,000 chars to protect the 16k context window
+            # while ensuring the core mechanism of long forum posts is preserved.
+            if len(rich_text) > 16000:
+                rich_text = rich_text[:16000] + "\n\n[TEXT TRUNCATED FOR CONTEXT LIMITS]"
 
             return rich_text
         except Exception as e:
@@ -147,10 +162,6 @@ def _normalize_proposal(
         "expected_ruling": expected_ruling,
     }
     return normalized
-
-
-def _contains_mock_records(records: List[Dict[str, Any]]) -> bool:
-    return any(str(item.get("id", "")).startswith("MOCK_") for item in records)
 
 
 def fetch_governance_context(
@@ -192,7 +203,7 @@ def fetch_governance_context(
         if not isinstance(cooked, str) or not cooked.strip():
             raise ValueError("Discourse JSON is missing post_stream.posts[0].cooked")
 
-        text = BeautifulSoup(cooked, "html.parser").get_text("\n", strip=True)
+        text = _clean_discourse_cooked_html(cooked)
         if not text:
             raise ValueError("Failed to extract constitutional context text")
 
