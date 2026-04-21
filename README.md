@@ -1,23 +1,28 @@
 # Sentinel-Bench
 
-Sentinel-Bench is a formal empirical benchmark (April 2026) evaluating whether edge-native Small Language Models (SLMs) can function as automated constitutional firewalls for Decentralized Autonomous Organizations (DAOs).
+[![arXiv](https://img.shields.io/badge/arXiv-2604.16913-b31b1b.svg)](https://arxiv.org/abs/2604.16913)
+[![Python 3.14](https://img.shields.io/badge/python-3.14-blue.svg)](https://www.python.org/downloads/release/python-3140/)
+[![License: Custom Academic](https://img.shields.io/badge/License-Academic_Pre--Publication-red.svg)](#license)
 
-This repository contains the data ingestion pipeline, inference engine, and evaluation suite used to measure **Juridical Entropy**, **Hyper-Regulatory Overreach**, and **Reasoning-Induced Sycophancy** in modern AI architectures.
+**Sentinel-Bench** is the empirical evaluation suite for the working paper:  
+> **[The Cognitive Penalty: Ablating System 1 and System 2 Reasoning in Edge-Native SLMs for Decentralized Consensus](https://arxiv.org/abs/2604.16913)**
+
+This repository contains the data ingestion pipeline, inference engine, and evaluation suite used to measure **Juridical Consistency**, **Reasoning Non-Convergence**, and **Reasoning-Induced Sycophancy** in modern AI architectures acting as automated constitutional firewalls for Decentralized Autonomous Organizations (DAOs).
 
 ## Objective
 
-This benchmark isolates inference-time reasoning behavior through a strict intra-model ablation study. We compare:
+This benchmark isolates inference-time reasoning behavior through a strict intra-model ablation study on the Qwen-3.5-9B architecture. We compare:
 
 - **Control Arm (System 1):** `ollama_chat/qwen3.5:9b` with latent reasoning disabled (`think=False`).
 - **Experiment Arm (System 2):** `ollama_chat/qwen3.5:9b` with latent reasoning enabled (`think=True`).
 
-Both arms are evaluated across a 3-tier governance dataset (Baseline, Perturbed Sycophancy Traps, and highly contentious Case Studies) sourced authentically from the Optimism Agora API and Discourse forums.
+Both arms are evaluated across a 3-tier governance dataset (Baseline, Perturbed Sycophancy Traps, and highly contentious Case Studies) sourced authentically from the Optimism Agora REST API and Discourse JSON endpoints.
 
 ## Hardware & Compute Requirements
 
 Running this benchmark locally requires significant compute resources to accommodate the 16,384 token context window and massive reasoning trace generation:
-- **VRAM:** Minimum 10 GB dedicated VRAM or ≥16 GB unified memory (Apple Silicon class). Higher-capacity configurations (>=24 GB VRAM or >=32 GB unified memory) are recommended for optimal performance.
-- **Execution Time:** A full 840-inference benchmark run (21 proposals × 20 trials × 2 configurations) takes approximately **24 hours**, ultimately depending on GPU parallelization and reasoning volume.
+- **VRAM:** Minimum 10 GB dedicated VRAM or ≥16 GB unified memory (Apple Silicon class). Higher-capacity configurations (≥24 GB VRAM or ≥32 GB unified memory) are highly recommended.
+- **Execution Time:** A full 840-inference benchmark run (21 proposals × 20 trials × 2 configurations) takes approximately **24–26 hours**, heavily dependent on GPU memory bandwidth and System 2 reasoning volume.
 
 ## Project Structure
 
@@ -37,31 +42,31 @@ sentinel-bench/
 └── research_notebook.ipynb  # Main execution and visualization pipeline
 ```
 
-## Requirements
-
-- Python 3.14
-- Poetry
-- [Ollama](https://ollama.com/) running locally as a background service (`http://localhost:11434`)
-- Models pulled in Ollama:
-  - `qwen3.5:9b` (`ollama pull qwen3.5:9b`)
-
 ## Environment Setup
 
-1. Add your Optimism Agora API key to `.env`:
+1. **Prerequisites:** 
+   - Python 3.14
+   - [Poetry](https://python-poetry.org/)
+   - [Ollama](https://ollama.com/) running locally as a background service (`http://localhost:11434`)
 
+2. **Pull the Model:**
+```bash
+ollama pull qwen3.5:9b
+```
+
+3. **Configure the Environment:**
+Add your Optimism Agora API key to `.env`:
 ```env
 AGORA_API_KEY=your_key_here
 ```
 
-2. Configure Poetry and install dependencies:
-
+4. **Install Dependencies:**
 ```bash
 poetry env use python3.14
 poetry install
 ```
 
-3. Register notebook kernel (optional if already available in VS Code/Jupyter):
-
+5. **Register Notebook Kernel:**
 ```bash
 poetry run python -m ipykernel install --user --name sentinel-bench --display-name "Sentinel-Bench"
 ```
@@ -75,18 +80,31 @@ The notebook includes a data-source toggle in Cell 2:
 - `FORCE_REFRESH_FROM_WEB = False`: Cache-first mode (ensures reproducibility by reusing local snapshots).
 - `FORCE_REFRESH_FROM_WEB = True`: Forces fresh API pulls from Agora and Discourse.
 
-If cache reuse is enabled, the pipeline resolves in this order:
-1. The explicitly requested date snapshot
-2. The latest available dated snapshot
-3. Canonical latest cache (`agora_proposals_latest.json`)
-4. Live API fetch
+*Note: The Jupyter Notebook includes a robust append-only checkpointing system. If your hardware crashes or thermal-throttles mid-execution, simply restart the notebook; it will safely resume at the exact trial it dropped using the RNG seed.*
 
-## Outputs
+## Citation
 
-All artifacts are generated in the `data/results/` directory:
-- **Live benchmark records:** `benchmark_live.csv`
-- **Diagnostic smoke-test records:** `diagnostic_live.csv`
-- **Runtime telemetry:** `experiment.log`
-- **Publication artifacts:** High-DPI Seaborn plots (`*.png`) and LaTeX tables (`tables/*.tex`)
+If you reference this benchmark, dataset, or use this code for academic comparison, please cite the associated working paper:
 
-*Note: The Jupyter Notebook includes a robust append-only checkpointing system. If your hardware crashes mid-execution, simply restart the notebook; it will safely resume at the exact trial it dropped.*
+```bibtex
+@misc{rizvi2026cognitivepenaltyablating1,
+      title={The Cognitive Penalty: Ablating System 1 and System 2 Reasoning in Edge-Native SLMs for Decentralized Consensus}, 
+      author={Syed Muhammad Aqdas Rizvi},
+      year={2026},
+      eprint={2604.16913},
+      archivePrefix={arXiv},
+      primaryClass={cs.AI},
+      url={https://arxiv.org/abs/2604.16913}, 
+}
+```
+
+## Contact & Collaboration
+I am actively seeking to collaborate with researchers. If you are interested in discussing these findings, proposing architectural modifications, or utilizing this framework, please reach out!
+
+**Syed Muhammad Aqdas Rizvi**
+
+Independent Researcher | Alumnus, LUMS
+
+Website: [smarizvi110.com](https://smarizvi110.com/)
+
+Email: [25100166@lums.edu.pk](mailto:25100166@lums.edu.pk) | [s.muhammadaqdasrizvi@gmail.com](mailto:s.muhammadaqdasrizvi@gmail.com)
